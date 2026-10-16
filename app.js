@@ -9,7 +9,7 @@
  function connection(ok){state.online=ok;$('connection').textContent=ok?'Server connected · refreshed '+time(new Date()):'Connection interrupted · saves not confirmed';$('connection').classList.toggle('bad',!ok)}
  async function rpc(action,p={}){try{const data=await T.rpc(action,p);connection(true);return data}catch(e){if(/fetch|network|timeout|abort|load failed/i.test(e.message))connection(false);throw e}}
  const cycle=()=>state.data?.cycles.find(c=>c.id===state.cycle);
- function show(name){state.view=name;for(const id of ['dashboard','countView','accountingView'])$(id).hidden=id!==name;$('navSheets').classList.toggle('selected',name!=='accountingView');$('navAccounting').classList.toggle('selected',name==='accountingView');window.scrollTo(0,0)}
+ function show(name){state.view=name;for(const id of ['dashboard','countView','accountingView','adminView'])if($(id))$(id).hidden=id!==name;$('navSheets').classList.toggle('selected',['dashboard','countView'].includes(name));$('navAccounting').classList.toggle('selected',name==='accountingView');$('navAdmin')?.classList.toggle('selected',name==='adminView');window.scrollTo(0,0)}
  function mayLeave(){return !state.saving.size&&(!state.dirty.size||confirm('There are quantities not confirmed by the server. Leave and discard these unsaved edits?'))}
  async function refresh(){if(polling)return;polling=true;try{
   const data=await rpc('list');state.data=data;
@@ -78,11 +78,11 @@
   const rows=state.account.lines.map(l=>({...l,usage:'TEST/PRACTICE ONLY - NOT OPERATIONAL STOCK',cycle:state.cycle,source_hash:cycle().source_hash,exported_at:stamp}));
   const csv='\uFEFF'+[columns.map(safe).join(','),...rows.map(r=>columns.map(c=>safe(r[c])).join(','))].join('\r\n');const a=document.createElement('a');a.href=URL.createObjectURL(new Blob([csv],{type:'text/csv;charset=utf-8'}));a.download=`SMI-counts-${state.cycle}.csv`;a.click();setTimeout(()=>URL.revokeObjectURL(a.href),1000);toast('Exported current server snapshot. Import Item Number as Text in Excel to preserve leading zeros.');
  }
- async function signedIn(){await refresh();$('login').hidden=true;$('workspace').hidden=false;$('practiceBanner').hidden=false;$('practiceBanner').textContent=T.local?'LOCAL TEST — not production authentication':'TEST / PRACTICE · Private 2025 source · NOT current operational stock. Counts are practice only. No GP writes.';show('dashboard');renderDashboard();}
+ async function signedIn(){await refresh();try{await window.InventoryAdmin.init({leaveSheet,show,refresh,selectCycle:id=>{state.cycle=id}})}catch(e){if($('navAdmin'))$('navAdmin').hidden=true;toast('Workbook/user setup unavailable: '+e.message)}$('login').hidden=true;$('workspace').hidden=false;$('practiceBanner').hidden=false;$('practiceBanner').textContent=T.local?'LOCAL TEST — not production authentication':'TEST / PRACTICE · Source on-hand is unverified reference · NOT operational stock. Counts are practice only. No GP writes.';show('dashboard');renderDashboard();}
  function bind(id,event,fn){$(id).addEventListener(event,async e=>{try{await fn(e)}catch(err){toast(err.message)}})}
  bind('practiceSignIn','click',async()=>{await T.login($('practiceUser').value);await signedIn()});
  bind('signInForm','submit',async e=>{e.preventDefault();try{await T.login($('email').value,$('password').value);$('password').value='';await signedIn()}catch(err){$('loginMessage').textContent=err.message}});
- bind('logout','click',async()=>{if(!mayLeave())return;if(editable())await release();await T.logout();state.data=null;state.detail=null;state.lease=null;state.dirty.clear();$('workspace').hidden=true;$('login').hidden=false;});
+ bind('logout','click',async()=>{if(window.InventoryAdmin.busy){toast('Wait for the upload to finish before signing out.');return}if(!mayLeave())return;if(editable())await release();await T.logout();window.InventoryAdmin.reset();state.data=null;state.detail=null;state.lease=null;state.dirty.clear();$('workspace').hidden=true;$('login').hidden=false;});
  bind('refresh','click',refresh);for(const id of ['cycle','site','status'])bind(id,'change',()=>{state.cycle=$('cycle').value;state.page=0;renderDashboard()});bind('search','input',()=>{state.page=0;renderDashboard()});
  bind('prev','click',()=>{state.page--;renderDashboard()});bind('next','click',()=>{state.page++;renderDashboard()});
  bind('tiles','click',e=>{const b=e.target.closest('[data-sheet]');if(b)return openSheet(b.dataset.sheet)});

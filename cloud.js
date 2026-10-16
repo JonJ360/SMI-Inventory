@@ -9,5 +9,6 @@ window.InventoryTransport=(()=>{
   return {local:false};
  }
  async function rpc(action,payload={}){if(local)return post('/api/rpc',{action,payload});const verified=await window.Shared360Session.current();if(!verified)throw Error('Please sign in with your existing 360 account.');const {data,error}=await window.Shared360Session.client.rpc('inv_api',{p_action:action,p_payload:payload});if(error)throw error;return data;}
- return {init,rpc,get local(){return local},async login(id,password){if(local)return post('/api/login',{id});const {error}=await window.Shared360Session.client.auth.signInWithPassword({email:id,password});if(error)throw error;},async logout(){if(local)return post('/api/logout',{});const {error}=await window.Shared360Session.client.auth.signOut();if(error)throw error;}};
+ async function admin(action,payload={}){if(local)return post('/api/rpc',{admin:true,action,payload});const verified=await window.Shared360Session.current();if(!verified)throw Error('Please sign in with your existing 360 account.');const {data,error}=await window.Shared360Session.client.rpc('inv_admin',{p_action:action,p_payload:payload});if(error)throw error;return data;}
+ return {init,rpc,admin,get local(){return local},async login(id,password){if(local)return post('/api/login',{id});const {error}=await window.Shared360Session.client.auth.signInWithPassword({email:id,password});if(error)throw error;},async logout(){if(local)return post('/api/logout',{});const {error}=await window.Shared360Session.client.auth.signOut();if(error)throw error;}};
 })();

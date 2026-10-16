@@ -8,7 +8,7 @@ window.InventoryAdmin=(()=>{
  <div class="filters">${['BIS','GF','FARGO'].map(s=>`<label>${s} workbook<input id="file${s}" type="file" accept=".xlsx" style="width:100%;min-width:0"></label>`).join('')}</div>
  <label>Practice session name<input id="importLabel" maxlength="100" value="Revised workbook practice"></label>
  <button id="previewImport" class="secondary">Validate & preview</button><div id="importPreview" aria-live="polite"></div>
- <label class="check"><input type="checkbox" id="approveImport"> I approve approximate 40-row digital sheets for practice (NOT native printed-page boundaries). Bins containing & stay together; units and on-hand are unverified reference only.</label>
+ <label class="check"><input type="checkbox" id="approveImport"> I approve approximate 40-row digital sheets for practice (NOT native printed-page boundaries). Literal & separates independent named bins; BB means bunk beds, not a third bin; units and on-hand are unverified reference only.</label>
  <button id="runImport" class="primary" disabled>Create fresh practice session</button><button id="cancelImport" hidden>Discard incomplete upload</button><p id="importStatus" role="status"></p></section>
  <section id="memberPanel"><h2>Approved users</h2><p>Administrator only. Look up one exact, confirmed 360 account email. Verify affiliation and authority independently before granting access. No domain-wide grants, new account creation or administrator promotion.</p><div id="memberList"></div>
  <label>Existing account email<input id="memberEmail" type="email" autocomplete="off"></label><button id="lookupMember">Verify exact account</button><p id="memberIdentity"></p>
@@ -21,13 +21,13 @@ window.InventoryAdmin=(()=>{
   if(request)throw Error('Finish/retry or discard the incomplete upload first.');
   prepared=null;manifest=null;$('runImport').disabled=true;$('approveImport').checked=false;$('importPreview').textContent='Validating workbooks…';lock(true);
   try{const files=[];for(const site of ['BIS','GF','FARGO']){const file=$('file'+site).files[0];if(file)files.push(await window.InventoryWorkbook.parse(file,site))}if(!files.length)throw Error('Select at least one site workbook');if(files.reduce((n,f)=>n+f.rows.length,0)>50000)throw Error('Maximum 50,000 rows per practice session');prepared=files;
-   $('importPreview').innerHTML=files.map(f=>`<p><b>${esc(f.source.site)}: ${f.rows.length.toLocaleString()} items / ${Math.ceil(f.rows.length/40)} digital sheets</b><br>${esc(f.source.filename)} · worksheet ${esc(f.source.worksheet)} · ${f.otherSheets} other worksheets ignored · ${f.issues} compound/unassigned bin entries retained as written.<br>SHA-256: <small style="overflow-wrap:anywhere">${esc(f.source.sha256)}</small></p>`).join('');status('Preview validated. Review the selected sites and approve practice grouping.');
+   $('importPreview').innerHTML=files.map(f=>`<p><b>${esc(f.source.site)}: ${f.rows.length.toLocaleString()} items / ${f.assignments.toLocaleString()} bin assignments / ${Math.ceil(f.rows.length/40)} digital sheets</b><br>${esc(f.source.filename)} · worksheet ${esc(f.source.worksheet)} · ${f.otherSheets} other worksheets ignored · ${f.issues} sentinel/unassigned entries need review (not guaranteed physical bins). Each named bin gets its own blank count; no historical ALT/BB quantities are allocated.<br>SHA-256: <small style="overflow-wrap:anywhere">${esc(f.source.sha256)}</small></p>`).join('');status('Preview validated. Review the selected sites and approve practice grouping.');
   }catch(e){$('importPreview').textContent='Validation failed: '+e.message;throw e}finally{lock(false);$('runImport').disabled=!prepared}
  }
  async function upload(){
   if(!prepared||!$('approveImport').checked)throw Error('Validate workbooks and approve approximate practice grouping first.');
   if(!$('importLabel').value.trim())throw Error('Enter a practice session name.');
-  if(!request){request=crypto.randomUUID();manifest={request,label:$('importLabel').value.trim(),practice:true,grouping:'digital-40',sources:prepared.map(f=>f.source)}}
+  if(!request){request=crypto.randomUUID();manifest={request,label:$('importLabel').value.trim(),practice:true,grouping:'digital-40',bin_semantics:window.InventoryWorkbook.bin_semantics,sources:prepared.map(f=>f.source)}}
   lock(true);let complete=false;
   try{
    status('Starting private upload…');await api('begin',manifest);const rows=prepared.flatMap(f=>f.rows);
@@ -36,8 +36,8 @@ window.InventoryAdmin=(()=>{
    if(!result){for(let i=0;i<rows.length;i+=200){status(`Uploading ${Math.min(i+200,rows.length).toLocaleString()} / ${rows.length.toLocaleString()} items…`);await api('chunk',{request,index:i/200,rows:rows.slice(i,i+200)})}result=await api('finish',{request})}
    // Read back the exact cycle and counts before claiming success.
    const check=await window.InventoryTransport.rpc('list'),sheets=check.sheets.filter(s=>s.cycle_id===result.cycle);
-   if(!check.cycles.some(c=>c.id===result.cycle)||sheets.length!==result.sheets||sheets.reduce((n,s)=>n+Number(s.total),0)!==result.items)throw Error('Session readback did not match; retry verification.');
-   status(`Server confirmed: ${result.items.toLocaleString()} items, ${result.sheets} fresh practice sheets. Prior sessions unchanged. Select the new PRACTICE session in Count sheets.`);
+   if(!check.cycles.some(c=>c.id===result.cycle)||sheets.length!==result.sheets||sheets.reduce((n,s)=>n+Number(s.total),0)!==result.assignments||result.items!==rows.length||result.assignments!==prepared.reduce((n,f)=>n+f.assignments,0)||result.bin_semantics!==window.InventoryWorkbook.bin_semantics)throw Error('Session readback did not match; retry verification.');
+   status(`Server confirmed: ${result.items.toLocaleString()} items, ${result.assignments.toLocaleString()} independent bin assignments, ${result.sheets} fresh practice sheets. Prior sessions unchanged. Select the new PRACTICE session in Count sheets.`);
    hooks.selectCycle(result.cycle);await hooks.refresh();request=null;prepared=null;manifest=null;complete=true;$('importPreview').textContent='';for(const s of ['BIS','GF','FARGO'])$('file'+s).value='';$('approveImport').checked=false;
   }catch(e){status('NOT CONFIRMED: '+e.message+' Keep this page open and retry; the same request cannot duplicate a session.');throw e}
   finally{lock(false);$('runImport').disabled=complete;$('cancelImport').hidden=!request}

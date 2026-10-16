@@ -2,6 +2,8 @@
 // Dependency-free, bounded XLSX reader for the existing SMI count-sheet contract.
 // Raw workbook bytes stay in the browser. Never follows external relationships.
 window.InventoryWorkbook=(()=>{
+ const bin_semantics='ampersand-named-v1';
+ function splitBins(raw){const bins=String(raw||'UNASSIGNED').split('&').map(b=>b.trim());if(bins.some(b=>!b)||new Set(bins).size!==bins.length)throw Error('Empty or duplicate bin tokens');return bins;}
  const limit=40*1024*1024;
  function xml(text){if(/<!DOCTYPE|<!ENTITY/i.test(text))throw Error('XML entities are not supported');const d=new DOMParser().parseFromString(text,'application/xml');if(d.querySelector('parsererror'))throw Error('Malformed workbook XML');return d;}
  const nodes=(e,n)=>[...e.getElementsByTagNameNS('*',n)];
@@ -69,13 +71,13 @@ window.InventoryWorkbook=(()=>{
    if(seen.has(item))throw Error('Duplicate Item # in selected site');seen.add(item);
    const bin=field('BIN NUMBER',true)||'UNASSIGNED',onhand=field('ON HAND');
    if(onhand!==''&&(!Number.isFinite(Number(onhand))||!/^[-+]?\d+(\.\d+)?(?:[eE][-+]?\d+)?$/.test(onhand)))throw Error('On Hand must be numeric or blank');
-   if(bin.includes('&')||bin==='UNASSIGNED'||bin==='0')compound++;
-   rows.push({site,item_number:item,description:field('ITEM DESCRIPTION'),bin,on_hand:onhand===''?null:Number(onhand),source_row:Number(r.getAttribute('r'))});
+   const bins=splitBins(bin);if(bins.some(b=>b==='UNASSIGNED'||b==='0'||b.startsWith('NI')))compound++;
+   rows.push({site,item_number:item,description:field('ITEM DESCRIPTION'),bin,bins,on_hand:onhand===''?null:Number(onhand),source_row:Number(r.getAttribute('r'))});
    if(rows.length>50000)throw Error('Too many source rows');
   }
   if(!rows.length)throw Error('No inventory items found');
   const sha256=[...new Uint8Array(await crypto.subtle.digest('SHA-256',buffer))].map(n=>n.toString(16).padStart(2,'0')).join('');
-  return {source:{site,filename:file.name,sha256,rows:rows.length,worksheet:first.getAttribute('name')},rows,issues:compound,otherSheets:worksheets.length-1};
+  return {bin_semantics,assignments:rows.reduce((n,r)=>n+r.bins.length,0),source:{site,filename:file.name,sha256,rows:rows.length,worksheet:first.getAttribute('name')},rows,issues:compound,otherSheets:worksheets.length-1};
  }
- return {parse};
+ return {parse,splitBins,bin_semantics};
 })();

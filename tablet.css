@@ -16,6 +16,9 @@
 #tiles button{min-height:44px;width:100%;font-size:12px;border-radius:6px}
 #tiles button::after{content:"";position:absolute;inset:0;border-radius:12px}
 #tiles .empty{grid-column:1/-1}
+#loadMore{display:flex;flex-wrap:wrap;justify-content:center;align-items:center;gap:8px}
+#loadMore button{min-height:44px}#loadMore button:focus-visible{outline:3px solid var(--blue);outline-offset:2px}
+#pageInfo{flex-basis:100%;text-align:center}
 @media(max-width:699px){#tiles{grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}#tiles .sheet-tile{padding:9px;gap:6px}#tiles .tile-top{flex-direction:column}#tiles .page-number{font-size:32px}}
 
 /* Ownership labels wrap inside their column, including long display names. */

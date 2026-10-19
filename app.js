@@ -12,7 +12,7 @@
  function connection(ok){state.online=ok;$('connection').textContent=ok?'Server connected · refreshed '+time(new Date()):'Connection interrupted · checkout and saves unconfirmed';$('connection').classList.toggle('bad',!ok);if(!ok){state.confirmed=false;updateControls();if(state.view==='dashboard')renderDashboard()}}
  async function rpc(action,p={}){const started=performance.now(),mutation=!['list','sheet','accounting'].includes(action);if(mutation)state.epoch++;try{const data=await T.rpc(action,p);if(data&&typeof data==='object')observations.set(data,started);connection(true);return data}catch(e){if(/fetch|network|timeout|abort|load failed/i.test(e.message))connection(false);throw e}finally{if(mutation)state.epoch++}}
  const cycle=()=>state.data?.cycles.find(c=>c.id===state.cycle);
- function show(name){state.view=name;for(const id of ['dashboard','countView','accountingView','adminView'])if($(id))$(id).hidden=id!==name;$('navSheets').classList.toggle('selected',['dashboard','countView'].includes(name));$('navAccounting').classList.toggle('selected',name==='accountingView');$('navAdmin')?.classList.toggle('selected',name==='adminView');window.scrollTo(0,0)}
+ function show(name){if(state.view==='dashboard')selector.scroll=window.scrollY;state.view=name;for(const id of ['dashboard','countView','accountingView','adminView'])if($(id))$(id).hidden=id!==name;$('navSheets').classList.toggle('selected',['dashboard','countView'].includes(name));$('navAccounting').classList.toggle('selected',name==='accountingView');$('navAdmin')?.classList.toggle('selected',name==='adminView');window.scrollTo(0,name==='dashboard'?selector.scroll||0:0)}
  function mayLeave(){return !state.saving.size&&(!state.dirty.size||confirm('There are quantities not confirmed by the server. Leave and discard these unsaved edits?'))}
  async function refresh(){if(polling)return;polling=true;const epoch=state.epoch;try{
   const data=await rpc('list');if(epoch!==state.epoch)return;state.data=data;
@@ -24,7 +24,11 @@
  }finally{polling=false}}
  function sheetStatus(s){if(!fresh(state.data))return 'unknown';if(s.status==='submitted')return 'submitted';if(Date.parse(s.lease_until)>Date.parse(state.data.server_time))return 'active';return 'available'}
  function metric(label,value,note){return `<div class="metric"><p class="eyebrow">${esc(label)}</p><strong>${esc(value)}</strong><span>${esc(note)}</span></div>`}
+ const selector={limit:25,key:''};
  function renderDashboard(){if(!state.data)return;
+  const key=JSON.stringify([state.cycle,$('site').value,$('search').value,$('status').value]);
+  if(key!==selector.key){selector.key=key;selector.limit=25;$('tiles').replaceChildren()}
+  const scroll=window.scrollY;
   const sheets=state.data.sheets.filter(s=>s.cycle_id===state.cycle&&(!$('site').value||s.site===$('site').value));
   const submitted=sheets.filter(s=>s.status==='submitted').length,active=sheets.filter(s=>sheetStatus(s)==='active').length;
   const total=sheets.reduce((n,s)=>n+Number(s.total),0),counted=sheets.reduce((n,s)=>n+Number(s.counted),0);
@@ -32,12 +36,28 @@
   $('cycleNotice').hidden=cycle()?.state==='open'&&cycle()?.mapping_approved;
   $('cycleNotice').textContent='Reference / draft cycle — counting is disabled. Source mapping, units and the new-cycle baseline need approval. Prior-year quantities have not been carried forward.';
   const q=$('search').value.toLowerCase();const filtered=sheets.filter(s=>(!$('status').value||sheetStatus(s)===$('status').value)&&`${s.label} ${s.bin} ${s.site}`.toLowerCase().includes(q));
-  const pages=Math.max(1,Math.ceil(filtered.length/24));state.page=Math.min(state.page,pages-1);
-  $('tiles').innerHTML=filtered.slice(state.page*24,state.page*24+24).map(s=>{
+  const visible=filtered.slice(0,selector.limit),existing=new Map([...$('tiles').querySelectorAll('.sheet-tile')].map(e=>[e.querySelector('[data-sheet]').dataset.sheet,e]));
+  const template=document.createElement('template');
+  template.innerHTML=visible.map(s=>{
    const status=sheetStatus(s),draft=cycle()?.state!=='open',pageNumber=s.label.match(/\b(?:sheet|page|digital)\s+0*(\d+)/i)?.[1]||s.label;const text=status==='unknown'?'Status unconfirmed':draft?'Draft':status==='active'?'In use by '+esc(s.owner_name||'another counter'):status==='submitted'?'Submitted · locked':'Available';
    return `<article class="sheet-tile"><div class="tile-top"><span>${esc(s.site)}</span><span class="badge ${draft?'draft':status==='active'?'active':status==='submitted'?'locked':''}">${text}</span></div><div class="page-identity"><span class="page-caption">Page</span><strong class="page-number">${esc(pageNumber)}</strong><h3>${esc(s.label)}</h3><p class="bin" title="${esc(s.bin)}">${esc(s.bin)}</p></div><div><div class="tile-progress"><span>${s.counted} of ${s.total} counted</span><span>${s.total?Math.round(s.counted/s.total*100):0}%</span></div><progress value="${s.counted}" max="${s.total||1}" aria-label="Count progress"></progress></div><div class="tile-owner">${status==='unknown'?'Last status is stale · refresh required':status==='active'?'● '+esc(s.owner_name)+' · until '+time(s.lease_until):status==='submitted'?'✓ Reviewed '+esc(s.initials)+' · '+time(s.submitted_at):draft?'Mapping review · read only':'No one is working on this sheet'}</div><button data-sheet="${esc(s.id)}" aria-label="View ${esc(s.site)} page ${esc(pageNumber)} · ${esc(s.label)}" class="${!draft&&status==='available'?'primary':'secondary'}">${draft?'View source sheet':'View sheet'}</button></article>`;
   }).join('')||'<div class="empty">No sheets match these filters.</div>';
-  $('pageInfo').textContent=`Page ${state.page+1} of ${pages} · ${filtered.length} sheets`;$('prev').disabled=state.page===0;$('next').disabled=state.page>=pages-1;
+  const ids=new Set(visible.map(s=>s.id));for(const [id,node] of existing)if(!ids.has(id))node.remove();
+  $('tiles').querySelector('.empty')?.remove();
+  for(const [index,node] of [...template.content.children].entries()){
+   const id=node.querySelector('[data-sheet]')?.dataset.sheet,old=existing.get(id);
+   if(old){
+    // Keep the tile and native action node stable during polling and appends.
+    for(let i=0;i<4;i++)if(old.children[i].innerHTML!==node.children[i].innerHTML)old.children[i].innerHTML=node.children[i].innerHTML;
+    const button=old.querySelector('button'),next=node.querySelector('button');
+    for(const attr of ['class','aria-label'])if(button.getAttribute(attr)!==next.getAttribute(attr))button.setAttribute(attr,next.getAttribute(attr));
+    if(button.textContent!==next.textContent)button.textContent=next.textContent;
+   }
+   const target=old||node;if($('tiles').children[index]!==target)$('tiles').insertBefore(target,$('tiles').children[index]||null);
+  }
+  $('pageInfo').textContent=`Showing ${visible.length} of ${filtered.length} sheets${visible.length===filtered.length?' · All matching sheets loaded':''}`;
+  for(const button of $('loadMore').querySelectorAll('button'))button.disabled=visible.length>=filtered.length;
+  window.scrollTo(0,scroll);
   $('statusTime').textContent=(fresh(state.data)?'Status confirmed · ':'Status unconfirmed · last response ')+time(state.data.server_time);
  }
  function leasePayload(){return {sheet:state.detail.sheet.id,device:state.device,fence:state.lease?.fence}}
@@ -109,7 +129,7 @@
  bind('signInForm','submit',async e=>{e.preventDefault();try{await T.login($('email').value,$('password').value);$('password').value='';await signedIn()}catch(err){$('loginMessage').textContent=err.message}});
  bind('logout','click',async()=>{if(window.InventoryAdmin.busy){toast('Wait for the upload to finish before signing out.');return}if(!await leaveSheet())return;await T.logout();window.InventoryAdmin.reset();state.data=null;state.detail=null;state.lease=null;state.dirty.clear();$('workspace').hidden=true;$('login').hidden=false;});
  bind('refresh','click',refresh);for(const id of ['cycle','site','status'])bind(id,'change',()=>{state.cycle=$('cycle').value;state.page=0;renderDashboard()});bind('search','input',()=>{state.page=0;renderDashboard()});
- bind('prev','click',()=>{state.page--;renderDashboard()});bind('next','click',()=>{state.page++;renderDashboard()});
+ bind('loadMore','click',e=>{const button=e.target.closest('[data-more]');if(!button||button.disabled)return;selector.limit+=Number(button.dataset.more);renderDashboard()});
  bind('tiles','click',e=>{const b=e.target.closest('[data-sheet]');if(b)return openSheet(b.dataset.sheet)});
  bind('back','click',async()=>{if(!await leaveSheet())return;show('dashboard');await refresh()});
  bind('navSheets','click',async()=>{if(!await leaveSheet())return;show('dashboard');await refresh()});bind('navAccounting','click',account);bind('export','click',exportCSV);

@@ -1,43 +1,47 @@
 'use strict';
 (()=>{
  const $=id=>document.getElementById(id),T=window.InventoryTransport;
- const state={data:null,cycle:'',page:0,view:'dashboard',detail:null,lease:null,dirty:new Set(),saving:new Set(),account:null,accountPage:0,pending:new Map(),device:crypto.randomUUID(),online:false};
+ const state={data:null,cycle:'',page:0,view:'dashboard',detail:null,lease:null,dirty:new Set(),saving:new Set(),account:null,accountPage:0,pending:new Map(),device:crypto.randomUUID(),online:false,confirmed:false,handoff:false,acquiring:false,epoch:0};
  const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
  const time=s=>s?new Date(s).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit',second:'2-digit'}):'—';
  let toastTimer,polling=false,heartbeat=false;
+ const observations=new WeakMap();
+ const fresh=o=>{const stamp=observations.get(o);return state.online&&!document.hidden&&stamp!==undefined&&performance.now()-stamp<15000};
+ function confirmedLease(s){return !!state.lease&&s.owner_id===state.data.user.id&&s.device===state.device&&s.fence===state.lease.fence&&Date.parse(s.lease_until)>Date.parse(state.data.server_time)}
  function toast(message){$('toast').textContent=message;$('toast').hidden=false;clearTimeout(toastTimer);toastTimer=setTimeout(()=>$('toast').hidden=true,7000)}
- function connection(ok){state.online=ok;$('connection').textContent=ok?'Server connected · refreshed '+time(new Date()):'Connection interrupted · saves not confirmed';$('connection').classList.toggle('bad',!ok)}
- async function rpc(action,p={}){try{const data=await T.rpc(action,p);connection(true);return data}catch(e){if(/fetch|network|timeout|abort|load failed/i.test(e.message))connection(false);throw e}}
+ function connection(ok){state.online=ok;$('connection').textContent=ok?'Server connected · refreshed '+time(new Date()):'Connection interrupted · checkout and saves unconfirmed';$('connection').classList.toggle('bad',!ok);if(!ok){state.confirmed=false;updateControls();if(state.view==='dashboard')renderDashboard()}}
+ async function rpc(action,p={}){const started=performance.now(),mutation=!['list','sheet','accounting'].includes(action);if(mutation)state.epoch++;try{const data=await T.rpc(action,p);if(data&&typeof data==='object')observations.set(data,started);connection(true);return data}catch(e){if(/fetch|network|timeout|abort|load failed/i.test(e.message))connection(false);throw e}finally{if(mutation)state.epoch++}}
  const cycle=()=>state.data?.cycles.find(c=>c.id===state.cycle);
  function show(name){state.view=name;for(const id of ['dashboard','countView','accountingView','adminView'])if($(id))$(id).hidden=id!==name;$('navSheets').classList.toggle('selected',['dashboard','countView'].includes(name));$('navAccounting').classList.toggle('selected',name==='accountingView');$('navAdmin')?.classList.toggle('selected',name==='adminView');window.scrollTo(0,0)}
  function mayLeave(){return !state.saving.size&&(!state.dirty.size||confirm('There are quantities not confirmed by the server. Leave and discard these unsaved edits?'))}
- async function refresh(){if(polling)return;polling=true;try{
-  const data=await rpc('list');state.data=data;
+ async function refresh(){if(polling)return;polling=true;const epoch=state.epoch;try{
+  const data=await rpc('list');if(epoch!==state.epoch)return;state.data=data;
   if(!data.cycles.some(c=>c.id===state.cycle))state.cycle=[...data.cycles].reverse().find(c=>c.state==='open'&&c.bin_semantics==='ampersand-named-v1')?.id||data.cycles.find(c=>c.state==='open')?.id||data.cycles[0]?.id||'';
   $('cycle').innerHTML=data.cycles.map(c=>`<option value="${esc(c.id)}">${esc(c.label)}${c.state==='draft'?' · draft':''}</option>`).join('');$('cycle').value=state.cycle;
   $('userName').textContent=data.user.name;$('navAccounting').hidden=!data.user.accounting;
+  if(state.detail&&!state.handoff&&!state.acquiring&&!heartbeat){const s=data.sheets.find(s=>s.id===state.detail.sheet.id);if(s){state.detail.sheet=s;state.detail.server_time=data.server_time;observations.set(state.detail,observations.get(data));if(state.lease)state.confirmed=confirmedLease(s);updateControls()}}
   if(state.view==='dashboard')renderDashboard();
  }finally{polling=false}}
- function sheetStatus(s){if(s.status==='submitted')return 'submitted';if(Date.parse(s.lease_until)>Date.now())return 'active';return 'available'}
+ function sheetStatus(s){if(!fresh(state.data))return 'unknown';if(s.status==='submitted')return 'submitted';if(Date.parse(s.lease_until)>Date.parse(state.data.server_time))return 'active';return 'available'}
  function metric(label,value,note){return `<div class="metric"><p class="eyebrow">${esc(label)}</p><strong>${esc(value)}</strong><span>${esc(note)}</span></div>`}
  function renderDashboard(){if(!state.data)return;
   const sheets=state.data.sheets.filter(s=>s.cycle_id===state.cycle&&(!$('site').value||s.site===$('site').value));
   const submitted=sheets.filter(s=>s.status==='submitted').length,active=sheets.filter(s=>sheetStatus(s)==='active').length;
   const total=sheets.reduce((n,s)=>n+Number(s.total),0),counted=sheets.reduce((n,s)=>n+Number(s.counted),0);
-  $('metrics').innerHTML=metric('Count sheets',sheets.length,'In selected location')+metric('Ready to count',cycle()?.state==='open'&&cycle()?.mapping_approved?sheets.length-submitted-active:0,cycle()?.state==='open'&&cycle()?.mapping_approved?'Available for checkout':'Draft / closed · checkout disabled')+metric('In progress',active,'Exclusive active checkouts')+metric('Submitted',submitted,`${counted.toLocaleString()} / ${total.toLocaleString()} entries saved`);
+  $('metrics').innerHTML=metric('Count sheets',sheets.length,'In selected location')+metric(fresh(state.data)?'Ready to count':'Status unconfirmed',!fresh(state.data)?'—':cycle()?.state==='open'&&cycle()?.mapping_approved?sheets.length-submitted-active:0,cycle()?.state==='open'&&cycle()?.mapping_approved?'Available for checkout':'Draft / closed · checkout disabled')+metric('In progress',fresh(state.data)?active:'—','Exclusive active checkouts')+metric('Submitted',submitted,`${counted.toLocaleString()} / ${total.toLocaleString()} entries saved`);
   $('cycleNotice').hidden=cycle()?.state==='open'&&cycle()?.mapping_approved;
   $('cycleNotice').textContent='Reference / draft cycle — counting is disabled. Source mapping, units and the new-cycle baseline need approval. Prior-year quantities have not been carried forward.';
   const q=$('search').value.toLowerCase();const filtered=sheets.filter(s=>(!$('status').value||sheetStatus(s)===$('status').value)&&`${s.label} ${s.bin} ${s.site}`.toLowerCase().includes(q));
   const pages=Math.max(1,Math.ceil(filtered.length/24));state.page=Math.min(state.page,pages-1);
   $('tiles').innerHTML=filtered.slice(state.page*24,state.page*24+24).map(s=>{
-   const status=sheetStatus(s),draft=cycle()?.state!=='open';const text=draft?'Draft':status==='active'?'Checked out':status==='submitted'?'Submitted':'Available';
-   return `<article class="sheet-tile"><div class="tile-top"><span>${esc(s.site)}</span><span class="badge ${draft?'draft':status==='active'?'active':status==='submitted'?'locked':''}">${text}</span></div><div><h3>${esc(s.label)}</h3><p class="bin" title="${esc(s.bin)}">${esc(s.bin)}</p></div><div><div class="tile-progress"><span>${s.counted} of ${s.total} counted</span><span>${s.total?Math.round(s.counted/s.total*100):0}%</span></div><progress value="${s.counted}" max="${s.total||1}" aria-label="Count progress"></progress></div><div class="tile-owner">${status==='active'?'● '+esc(s.owner_name)+' · until '+time(s.lease_until):status==='submitted'?'✓ Reviewed '+esc(s.initials)+' · '+time(s.submitted_at):draft?'Mapping review · read only':'No one is working on this sheet'}</div><button data-sheet="${esc(s.id)}" class="${!draft&&status==='available'?'primary':'secondary'}">${status==='submitted'?'View submitted sheet':status==='active'?'View checkout':draft?'Inspect source sheet':'Open sheet →'}</button></article>`;
+   const status=sheetStatus(s),draft=cycle()?.state!=='open';const text=status==='unknown'?'Status unconfirmed':draft?'Draft':status==='active'?'In use by '+esc(s.owner_name||'another counter'):status==='submitted'?'Submitted · locked':'Available';
+   return `<article class="sheet-tile"><div class="tile-top"><span>${esc(s.site)}</span><span class="badge ${draft?'draft':status==='active'?'active':status==='submitted'?'locked':''}">${text}</span></div><div><h3>${esc(s.label)}</h3><p class="bin" title="${esc(s.bin)}">${esc(s.bin)}</p></div><div><div class="tile-progress"><span>${s.counted} of ${s.total} counted</span><span>${s.total?Math.round(s.counted/s.total*100):0}%</span></div><progress value="${s.counted}" max="${s.total||1}" aria-label="Count progress"></progress></div><div class="tile-owner">${status==='unknown'?'Last status is stale · refresh required':status==='active'?'● '+esc(s.owner_name)+' · until '+time(s.lease_until):status==='submitted'?'✓ Reviewed '+esc(s.initials)+' · '+time(s.submitted_at):draft?'Mapping review · read only':'No one is working on this sheet'}</div><button data-sheet="${esc(s.id)}" class="${!draft&&status==='available'?'primary':'secondary'}">${draft?'View source sheet':'View sheet'}</button></article>`;
   }).join('')||'<div class="empty">No sheets match these filters.</div>';
   $('pageInfo').textContent=`Page ${state.page+1} of ${pages} · ${filtered.length} sheets`;$('prev').disabled=state.page===0;$('next').disabled=state.page>=pages-1;
-  $('statusTime').textContent='Live status · '+time(state.data.server_time);
+  $('statusTime').textContent=(fresh(state.data)?'Status confirmed · ':'Status unconfirmed · last response ')+time(state.data.server_time);
  }
  function leasePayload(){return {sheet:state.detail.sheet.id,device:state.device,fence:state.lease?.fence}}
- function editable(){return !!state.lease&&state.detail?.sheet.status!=='submitted'&&Date.parse(state.lease.lease_until)>Date.now()}
+ function editable(){return !!state.lease&&state.confirmed&&fresh(state.detail)&&state.detail?.sheet.status!=='submitted'&&Date.parse(state.detail.sheet.lease_until)-Date.parse(state.detail.server_time)>performance.now()-observations.get(state.detail)}
  async function openSheet(id){if(!mayLeave())return;state.detail=await rpc('sheet',{sheet:id});state.lease=null;state.dirty.clear();state.pending.clear();$('onlyBlank').checked=false;show('countView');renderSheet();}
  function unresolved(l){return !l.bin||l.bin==='0'||l.bin.startsWith('NI')||l.bin==='UNASSIGNED'||l.bin.includes('&')}
  function binLabel(l,n){return unresolved(l)?'SOURCE BIN · REVIEW':l.bin==='BB'?'BB · Bunk beds':`Bin ${n+1} location`;}
@@ -48,15 +52,18 @@
   $('lines').innerHTML=[...groups.values()].map(group=>`<section class="item-bin-group" aria-label="Bins for ${esc(group[0].item_number)}"><header class="register-item"><span class="item-number">${esc(group[0].item_number)}</span><p class="description">${esc(group[0].description)}</p><span class="subtle">${esc(group[0].uom)} · ${group.length} named location${group.length===1?'':'s'}</span></header>${group.map((l,n)=>`<article class="count-line" data-line="${esc(l.id)}"><div class="item-info"><span class="item-number">${esc(l.item_number)}</span><p class="description">${esc(l.description)}</p></div><div><p class="eyebrow">${binLabel(l,n)}</p><p class="location">${esc(l.bin)}</p><span class="subtle">${esc(l.uom)}</span></div><label>Quantity<input class="quantity" type="text" inputmode="decimal" autocomplete="off" placeholder="Not counted" value="${esc(l.quantity)}" aria-label="Quantity for ${esc(l.item_number)} at ${esc(l.bin)}"></label><label class="notes-label">Note / unit check<input class="note" maxlength="1000" value="${esc(l.note)}" placeholder="Optional context" aria-label="Note for ${esc(l.item_number)}"></label><button class="save-button primary" data-save="${esc(l.id)}">Save quantity</button><div class="save-state ${l.saved_at?'ok':''}" role="status">${l.saved_at?'✓ Server confirmed · '+esc(l.saved_by)+' · '+time(l.saved_at)+' · revision '+l.revision:l.quantity===null?'Not counted · blank ≠ zero':'Server saved'}</div></article>`).join('')}</section>`).join('');updateControls();
  }
  function updateControls(){if(!state.detail)return;const s=state.detail.sheet,can=editable(),sheetCycle=state.data.cycles.find(c=>c.id===s.cycle_id),draft=sheetCycle?.state!=='open'||!sheetCycle?.mapping_approved;
-  $('acquire').hidden=can||s.status==='submitted'||draft;$('release').hidden=!can;$('reopen').hidden=!state.data.user.accounting||s.status!=='submitted'||draft;
-  $('leaseStatus').textContent=s.status==='submitted'?'Submitted · locked':can?'Your exclusive checkout · until '+time(state.lease.lease_until):draft?'Draft · read only':'Read only · check out to count';
+  const busy=!!state.handoff||!!state.acquiring,known=fresh(state.detail),active=Date.parse(s.lease_until)>Date.parse(state.detail.server_time);
+  $('acquire').hidden=can||s.status==='submitted'||draft;$('release').hidden=!state.lease;$('reopen').hidden=!state.data.user.accounting||s.status!=='submitted'||draft;
+  $('acquire').disabled=busy;$('release').disabled=busy||!can||!!state.saving.size;$('reopen').disabled=busy||!known;
+  $('acquire').textContent=state.lease?'Reconfirm checkout':'Start counting';$('release').textContent=state.handoff?'Saving and releasing…':'Save and release';
+  $('leaseStatus').textContent=!known?'Connection / status unconfirmed · read only':s.status==='submitted'?'Submitted · locked':can?'In use by '+state.data.user.name+' · your exclusive checkout':state.lease||state.acquiring?'Checkout unconfirmed · edits retained · read only':draft?'Draft · read only':active?'In use by '+(s.owner_name||state.data.sheets.find(x=>x.id===s.id&&x.owner_id===s.owner_id)?.owner_name||'another counter')+' · read only':'Available · view only · Start counting to edit';
   $('leaseStatus').className='badge '+(can?'active':'locked');
-  let complete=0;for(const l of state.detail.lines){if(l.quantity!==null)complete++;const row=document.querySelector(`[data-line="${CSS.escape(l.id)}"]`);if(!row)continue;const busy=state.saving.has(l.id);for(const input of row.querySelectorAll('input'))input.disabled=!can||busy;row.querySelector('button').disabled=!can||busy||!state.dirty.has(l.id);row.classList.toggle('dirty',state.dirty.has(l.id));row.hidden=$('onlyBlank').checked&&l.quantity!==null&&!state.dirty.has(l.id);}
+  let complete=0;for(const l of state.detail.lines){if(l.quantity!==null)complete++;const row=document.querySelector(`[data-line="${CSS.escape(l.id)}"]`);if(!row)continue;const rowBusy=busy||state.saving.has(l.id);for(const input of row.querySelectorAll('input'))input.disabled=!can||rowBusy;row.querySelector('button').disabled=!can||rowBusy||!state.dirty.has(l.id);row.classList.toggle('dirty',state.dirty.has(l.id));row.hidden=$('onlyBlank').checked&&l.quantity!==null&&!state.dirty.has(l.id);}
   $('countProgress').textContent=`${complete} / ${state.detail.lines.length} counted · ${state.dirty.size} unsaved`;
-  $('review').disabled=!can||complete!==state.detail.lines.length||!!state.dirty.size||!!state.saving.size;
+  $('review').disabled=!can||busy||complete!==state.detail.lines.length||!!state.dirty.size||!!state.saving.size;
  }
- async function acquire(){if(state.dirty.size&&!confirm('Re-checkout will reload server values and discard unsaved edits. Continue?'))return;state.lease=await rpc('acquire',{sheet:state.detail.sheet.id,device:state.device});state.detail=await rpc('sheet',{sheet:state.detail.sheet.id});state.dirty.clear();renderSheet();toast('Exclusive checkout confirmed by server.');}
- async function save(id){if(state.saving.has(id))return;const l=state.detail.lines.find(l=>l.id===id),row=document.querySelector(`[data-line="${CSS.escape(id)}"]`),raw=row.querySelector('.quantity').value.trim();
+ async function acquire(){if(state.acquiring||state.handoff||state.saving.size)return;if(state.dirty.size&&!state.lease){toast('Unsaved edits remain. Reload only after recording or discarding them deliberately.');return}state.acquiring=true;state.confirmed=false;updateControls();try{const lease=await rpc(state.lease?'heartbeat':'acquire',state.lease?leasePayload():{sheet:state.detail.sheet.id,device:state.device});state.lease=lease;const detail=await rpc('sheet',{sheet:state.detail.sheet.id});if(detail.sheet.fence!==lease.fence||detail.sheet.device!==state.device||detail.sheet.owner_id!==state.data.user.id||Date.parse(detail.sheet.lease_until)<=Date.parse(detail.server_time))throw Error('Checkout unconfirmed; refresh status');state.confirmed=true;if(state.dirty.size){state.detail.sheet=detail.sheet;state.detail.server_time=detail.server_time;observations.set(state.detail,observations.get(detail));updateControls()}else{state.detail=detail;renderSheet()}toast('Exclusive checkout confirmed by server.')}catch(e){state.confirmed=false;throw e}finally{state.acquiring=false;updateControls()}}
+ async function save(id){if(state.saving.has(id))return;if(!editable()){toast('Checkout unconfirmed. Reconfirm before saving; edits remain here.');return}const l=state.detail.lines.find(l=>l.id===id),row=document.querySelector(`[data-line="${CSS.escape(id)}"]`),raw=row.querySelector('.quantity').value.trim();
   if(raw!==''&&!/^\d+(\.\d{1,4})?$/.test(raw)){toast('Use a nonnegative quantity with up to four decimals, or leave blank.');return}
   const qty=raw===''?null:Number(raw);if(qty!==null&&(!Number.isFinite(qty)||qty>999999999)){toast('Quantity is outside the allowed range.');return}
   const note=row.querySelector('.note').value;let p=state.pending.get(id);
@@ -66,8 +73,21 @@
   catch(e){const label=row.querySelector('.save-state');label.textContent='NOT CONFIRMED — '+e.message+' Your edit remains here. Retry, or reload the sheet to check server state.';label.className='save-state error';toast(e.message);if(/lease|submitted|approved|sign in/i.test(e.message))state.lease=null;}
   finally{state.saving.delete(id);updateControls();}
  }
- async function release(){if(!mayLeave())return;await rpc('release',leasePayload());state.lease=null;state.dirty.clear();state.detail=await rpc('sheet',{sheet:state.detail.sheet.id});renderSheet();toast('Sheet released. Saved quantities remain on the server.');}
- async function leaveSheet(){if(!mayLeave())return false;if(editable())await release();state.lease=null;state.detail=null;state.dirty.clear();state.pending.clear();return true;}
+ async function release(){
+  if(state.handoff||state.saving.size||!editable())return false;
+  state.handoff=true;updateControls();
+  try{
+   // Freeze edits and drain every dirty row. A failed/invalid save remains dirty.
+   for(const id of [...state.dirty]){await save(id);if(state.dirty.has(id))return false}
+   if(state.dirty.size||state.saving.size||!editable())return false;
+   await rpc('release',leasePayload());
+   state.lease=null;state.confirmed=false;observations.delete(state.detail);
+   state.detail=await rpc('sheet',{sheet:state.detail.sheet.id});renderSheet();
+   toast('Server confirmed: all edits saved and sheet released.');return true;
+  }catch(e){state.confirmed=false;throw e}
+  finally{state.handoff=false;updateControls()}
+ }
+ async function leaveSheet(){if(state.handoff||state.acquiring||state.saving.size)return false;if(state.lease){if(!editable()){toast('Checkout unconfirmed. Reconfirm before saving and leaving.');return false}if(!await release())return false}else if(!mayLeave())return false;state.lease=null;state.detail=null;state.dirty.clear();state.pending.clear();return true;}
  async function account(){if(!await leaveSheet())return;state.account=await rpc('accounting',{cycle:state.cycle});show('accountingView');const items=state.account.items;
   $('accountSummary').innerHTML=metric('Items',items.length,'Selected cycle')+metric('Complete',items.filter(i=>i.complete).length,'All bins submitted')+metric('Awaiting bins',items.filter(i=>!i.complete).length,'No early variance flags')+metric('Differences',items.filter(i=>i.complete&&i.variance!==null&&Number(i.variance)!==0).length,'Review units before recount');
   state.accountPage=0;$('accountSearch').value='';renderAccountRows();
@@ -87,11 +107,11 @@
  function bind(id,event,fn){$(id).addEventListener(event,async e=>{try{await fn(e)}catch(err){toast(err.message)}})}
  bind('practiceSignIn','click',async()=>{await T.login($('practiceUser').value);await signedIn()});
  bind('signInForm','submit',async e=>{e.preventDefault();try{await T.login($('email').value,$('password').value);$('password').value='';await signedIn()}catch(err){$('loginMessage').textContent=err.message}});
- bind('logout','click',async()=>{if(window.InventoryAdmin.busy){toast('Wait for the upload to finish before signing out.');return}if(!mayLeave())return;if(editable())await release();await T.logout();window.InventoryAdmin.reset();state.data=null;state.detail=null;state.lease=null;state.dirty.clear();$('workspace').hidden=true;$('login').hidden=false;});
+ bind('logout','click',async()=>{if(window.InventoryAdmin.busy){toast('Wait for the upload to finish before signing out.');return}if(!await leaveSheet())return;await T.logout();window.InventoryAdmin.reset();state.data=null;state.detail=null;state.lease=null;state.dirty.clear();$('workspace').hidden=true;$('login').hidden=false;});
  bind('refresh','click',refresh);for(const id of ['cycle','site','status'])bind(id,'change',()=>{state.cycle=$('cycle').value;state.page=0;renderDashboard()});bind('search','input',()=>{state.page=0;renderDashboard()});
  bind('prev','click',()=>{state.page--;renderDashboard()});bind('next','click',()=>{state.page++;renderDashboard()});
  bind('tiles','click',e=>{const b=e.target.closest('[data-sheet]');if(b)return openSheet(b.dataset.sheet)});
- bind('back','click',async()=>{if(!mayLeave())return;if(editable())await release();state.dirty.clear();state.detail=null;show('dashboard');await refresh()});
+ bind('back','click',async()=>{if(!await leaveSheet())return;show('dashboard');await refresh()});
  bind('navSheets','click',async()=>{if(!await leaveSheet())return;show('dashboard');await refresh()});bind('navAccounting','click',account);bind('export','click',exportCSV);
  bind('accountSearch','input',()=>{state.accountPage=0;renderAccountRows()});bind('accountPrev','click',()=>{state.accountPage--;renderAccountRows()});bind('accountNext','click',()=>{state.accountPage++;renderAccountRows()});
  bind('acquire','click',acquire);bind('release','click',release);bind('onlyBlank','change',updateControls);
@@ -104,6 +124,8 @@
  bind('reopen','click',()=>{$('reason').value='';$('reopenDialog').showModal()});bind('cancelReopen','click',()=>$('reopenDialog').close());bind('reopenForm','submit',async e=>{e.preventDefault();await rpc('reopen',{sheet:state.detail.sheet.id,reason:$('reason').value});$('reopenDialog').close();state.detail=await rpc('sheet',{sheet:state.detail.sheet.id});state.lease=null;renderSheet();toast('Reopened with audit reason. Check out before changing quantities.');});
  window.addEventListener('beforeunload',e=>{if(state.dirty.size||state.saving.size){e.preventDefault();e.returnValue=''}});window.addEventListener('offline',()=>{connection(false);toast('Offline. Do not leave unsaved quantities. Saves require a server confirmation.')});
  setInterval(async()=>{if(!state.data)return;try{await refresh()}catch(e){connection(false)}},5000);
- setInterval(async()=>{if(!state.lease||heartbeat||!state.detail)return;heartbeat=true;try{state.lease=await rpc('heartbeat',leasePayload());updateControls()}catch(e){state.lease=null;updateControls();toast('Checkout no longer confirmed: '+e.message)}finally{heartbeat=false}},25000);
+ setInterval(async()=>{if(!state.lease||heartbeat||!state.detail||state.view!=='countView'||document.hidden||state.handoff||state.acquiring)return;heartbeat=true;const detail=state.detail,lease=state.lease;try{const renewed=await rpc('heartbeat',leasePayload());if(state.detail!==detail||state.lease!==lease)return;state.lease=renewed;await refresh()}catch(e){state.confirmed=false;updateControls();toast('Checkout unconfirmed: '+e.message)}finally{heartbeat=false}},25000);
+ setInterval(()=>{if(state.detail)updateControls();if(state.view==='dashboard'&&state.data&&!fresh(state.data))renderDashboard()},1000);
+ document.addEventListener('visibilitychange',()=>{state.confirmed=false;if(state.detail)updateControls();if(!document.hidden&&state.data)refresh().catch(()=>connection(false))});
  (async()=>{try{const mode=await T.init();$('login').hidden=false;$('practiceLogin').hidden=!mode.local;$('signInForm').hidden=mode.local;if(mode.local)$('practiceUser').innerHTML=mode.accounts.map(a=>`<option value="${esc(a.id)}">${esc(a.name)}</option>`).join('');try{await signedIn()}catch(e){$('loginMessage').textContent=mode.local?'Choose a practice account to explore the full workflow.':e.message}}catch(e){$('login').hidden=false;$('loginMessage').textContent=e.message}})();
 })();

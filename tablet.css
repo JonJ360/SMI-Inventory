@@ -1,4 +1,23 @@
-/* Compact full-width register; no sidebar offsets at any breakpoint. */
+/* Compact full-width count register; page selection uses chiclets below. */
+/* Selector-only overrides keep count entry and shell geometry unchanged. */
+#tiles{display:grid;grid-template-columns:repeat(auto-fill,minmax(190px,1fr));gap:10px;border:0;border-radius:0;overflow:visible}
+#tiles .sheet-tile{display:flex;flex-direction:column;align-items:stretch;position:relative;gap:8px;padding:12px;min-height:0;min-width:0;border:1px solid #bdcde3;border-radius:12px;background:white;box-shadow:0 2px 4px #233b610a}
+#tiles .sheet-tile:hover{border-color:var(--blue);background:#f5f8ff}
+#tiles .sheet-tile:focus-within{outline:3px solid var(--blue);outline-offset:2px}
+#tiles .tile-top{display:flex;justify-content:space-between;align-items:start;font-size:11px;gap:5px}
+#tiles .badge{font-size:10px;max-width:100%;text-align:left}
+#tiles .page-identity{text-align:center;min-width:0}
+#tiles .page-caption{display:block;font-size:10px;text-transform:uppercase;letter-spacing:1px;color:var(--muted)}
+#tiles .page-number{display:block;font-size:36px;font-weight:750;line-height:1.1;color:var(--navy);font-variant-numeric:tabular-nums}
+#tiles h3{font-size:10px;line-height:1.3;margin:5px 0 0;overflow-wrap:anywhere}
+#tiles .bin{font-size:10px}
+#tiles .tile-owner{font-size:10px;line-height:1.35;overflow-wrap:anywhere;flex:1}
+#tiles .tile-progress{font-size:10px}
+#tiles button{min-height:44px;width:100%;font-size:12px;border-radius:6px}
+#tiles button::after{content:"";position:absolute;inset:0;border-radius:12px}
+#tiles .empty{grid-column:1/-1}
+@media(max-width:699px){#tiles{grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}#tiles .sheet-tile{padding:9px;gap:6px}#tiles .tile-top{flex-direction:column}#tiles .page-number{font-size:32px}}
+
 /* Ownership labels wrap inside their column, including long display names. */
 .tile-top{min-width:0}.tile-top .badge,#leaseStatus{white-space:normal;overflow-wrap:anywhere;max-width:100%;line-height:1.35}
 .item-bin-group:not(:has(.count-line:not([hidden]))){display:none}
